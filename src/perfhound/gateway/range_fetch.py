@@ -85,9 +85,15 @@ def fetch_range(repo: str, good: str | None = None, bad: str | None = None, *, o
         if missing:
             raise GatewayError(f"not found in {source}: {', '.join(missing)}")
 
+    if isinstance(github_repo, str) and github_repo:
+        github_repo = parse_repo(github_repo)
+    ref = github_repo or ref or _env_repo() or _origin_repo(path)
+
     # 2. which range
     bad = bad or "HEAD"
     if not good or good == ZERO_SHA:                 # first push of a branch / nothing given: just `bad`
+        if run_git(path, "rev-parse", "--verify", "--quiet", f"{bad}^1^{{commit}}", check=False).returncode != 0:
+            return _nothing_to_compare(repo, path, bad, ref, evaluation, out, t0, log)
         good = f"{bad}^"
         warn.append(f"no good commit given - checking only {bad} itself (good = its parent)")
     if from_merge_base:                              # pull request: only the PR's own commits
@@ -95,10 +101,7 @@ def fetch_range(repo: str, good: str | None = None, bad: str | None = None, *, o
         if mb.returncode == 0 and mb.stdout.strip():
             good = mb.stdout.strip()
 
-    # 3. GitHub repo + provider
-    if isinstance(github_repo, str) and github_repo:
-        github_repo = parse_repo(github_repo)
-    ref = github_repo or ref or _env_repo() or _origin_repo(path)
+    # 3. GitHub provider
     provider = None
     if github and ref is not None:
         provider = _provider(client)
@@ -151,7 +154,7 @@ def fetch_range(repo: str, good: str | None = None, bad: str | None = None, *, o
 def summary_markdown(result: dict[str, Any], max_rows: int = 50) -> str:
     """A short Markdown report (GitHub Actions job summary / PR comment)."""
     g, b = result["good"], result["bad"]
-    short = lambda ref: ref[:7] if re.fullmatch(r"[0-9a-f]{40}", ref or "") else ref
+    short = lambda ref: ref[:7] if re.fullmatch(r"[0-9a-f]{40}", ref or "") else (ref or "the start")
     lines = [f"### Perfhound: {result['count']} commits between `{short(g['ref'])}` and `{short(b['ref'])}`", "",
              f"Repository: {result['github'] or result['repo']} · mode: {result['mode']} · "
              f"{result['stats']['with_pr']} with a PR · {result['stats']['seconds']} s", "",
@@ -172,6 +175,29 @@ def summary_markdown(result: dict[str, Any], max_rows: int = 50) -> str:
 
 
 # ------------------------------------------------------------------------------------- helpers
+
+def _nothing_to_compare(repo, path, bad, ref, evaluation, out, t0, log) -> dict[str, Any]:
+    """`bad` is the repository's very first commit: there is nothing before it to compare with."""
+    if isinstance(ref, str):
+        ref = parse_repo(ref) if ref else None
+    sha = run_git(path, "rev-parse", "--verify", "--quiet", f"{bad}^{{commit}}", check=False).stdout.strip()
+    if not sha:
+        raise GatewayError(f"{bad!r} is not a commit, tag or branch in this repository")
+    warning = f"{bad} is the first commit of the repository - there is nothing before it to compare with"
+    result = {
+        "format_version": RANGE_FORMAT_VERSION, "repo": repo, "github": ref.slug if ref else None,
+        "mode": "evaluation" if evaluation else "real",
+        "good": {"ref": None, "sha": None}, "bad": {"ref": bad, "sha": sha, "landed_at": None},
+        "count": 0, "commits": [],
+        "stats": {"seconds": round(time.perf_counter() - t0, 2), "from_cache": 0, "github_requests": 0, "with_pr": 0},
+        "warnings": [warning], "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    if out:
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        Path(out).write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    log(f"[3/3] 0 commits: {warning}")
+    return result
+
 
 def _provider(client: GitHubClient | None):
     from .github.graphql import GitHubGraphQLProvider

@@ -188,3 +188,19 @@ def test_cli_range(fixture_repo, tmp_path, capsys):
     assert "7 commits" in summary.read_text(encoding="utf-8")
     assert main(["range", str(fixture_repo.path), "--good", "no-such-tag", "--no-github", "--out", str(out)]) == 1
     assert "no-such-tag" in capsys.readouterr().err
+
+
+def test_first_commit_of_a_repository_has_nothing_to_compare(tmp_path):
+    """The very first push of a new repository: GitHub's "before" is all zeros and HEAD has no parent."""
+    from perfhound.gateway.gitcmd import run_git
+    repo = tmp_path / "new"
+    repo.mkdir()
+    run_git(repo, "init", "-q")
+    (repo / "a.py").write_text("x = 1\n")
+    run_git(repo, "add", "-A")
+    run_git(repo, "-c", "user.name=d", "-c", "user.email=d@x", "commit", "-q", "-m", "first")
+    out = tmp_path / "r.json"
+    res = fetch_range(str(repo), "0" * 40, "HEAD", out=out, github=False, cache=False, log=quiet)
+    assert res["count"] == 0 and "first commit" in res["warnings"][0]
+    assert json.loads(out.read_text(encoding="utf-8"))["count"] == 0
+    assert "Perfhound: 0 commits" in summary_markdown(res)

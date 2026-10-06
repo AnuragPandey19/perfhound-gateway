@@ -62,12 +62,16 @@ class RawCommitInfo:
 def parse_git_date(iso: str, epoch: str | int | None = None) -> datetime:
     """Git ISO-8601 date (%aI / %cI) -> timezone-aware datetime.
 
+    Newer git prints UTC as "Z" (older: "+00:00"); Python 3.10 cannot read "Z" - handled.
     Old histories contain broken time zones (requests, 2011: "+051800", printed by git as
     "+518:00"), which Python cannot parse. Then the moment comes from the epoch seconds
     (%at / %ct, always correct), in UTC.
     """
+    iso = iso.strip()
+    if iso.endswith("Z"):
+        iso = iso[:-1] + "+00:00"
     try:
-        dt = datetime.fromisoformat(iso.strip())
+        dt = datetime.fromisoformat(iso)
         if dt.utcoffset() is not None and (epoch is None or int(dt.timestamp()) == int(epoch)):
             return dt
     except (ValueError, OverflowError):

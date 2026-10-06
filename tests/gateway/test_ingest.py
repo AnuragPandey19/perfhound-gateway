@@ -214,3 +214,8 @@ def test_token_commands_dispatch_without_a_link(monkeypatch, capsys):
     assert cli.main(["login", "--token", "ghp_x"]) == 0 and cli.main(["whoami"]) == 0
     assert calls == [("login", "ghp_x"), ("whoami", None)]
     assert cli.main(["not a link"]) == 1 and "not a repository link" in capsys.readouterr().err
+
+
+def test_newer_git_prints_utc_as_z():
+    assert parse_git_date("2026-10-06T08:02:46Z", "1791273766") == datetime(2026, 10, 6, 8, 2, 46, tzinfo=timezone.utc)
+    assert parse_git_date("2026-10-06T08:02:46Z").utcoffset() == timedelta(0)
