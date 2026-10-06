@@ -1,5 +1,6 @@
 # Runs the gateway on THIS repository: on every push, on pull requests, and by hand
-# (Actions tab -> perfhound -> Run workflow -> type a good and a bad commit / tag).
+# (Actions tab -> perfhound -> Run workflow -> type a good and a bad commit / tag, and
+# optionally another public project, e.g. repository psf/requests, good v2.32.3, bad v2.32.4).
 name: perfhound
 
 on:
@@ -7,6 +8,10 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      repository:
+        description: "Another public project, owner/name (e.g. psf/requests). Empty = this repository"
+        required: false
+        default: ""
       good:
         description: "Last fast commit / tag (empty = the commit before 'bad')"
         required: false
@@ -32,6 +37,7 @@ jobs:
       - id: perfhound
         uses: ./                    # this repository's action.yml
         with:
+          repository: ${{ inputs.repository }}
           good: ${{ inputs.good }}
           bad: ${{ inputs.bad }}
 

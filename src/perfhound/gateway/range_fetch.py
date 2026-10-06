@@ -28,6 +28,7 @@ import os
 import re
 import time
 import warnings as pywarnings
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -115,9 +116,17 @@ def fetch_range(repo: str, good: str | None = None, bad: str | None = None, *, o
             commit_range = gw.resolve(good, bad)
             commits = gw.get_candidates(commit_range.good, commit_range.bad)
             stats = gw.last_stats
+            gh_with_pr, gh_requests, gh_warnings = stats.github_with_pr, stats.github_requests, list(stats.github_warnings)
+            if _is_graphql(provider) and gh_with_pr == 0 and gh_warnings:
+                # GraphQL refused (e.g. a token that may not use GraphQL on this repository): try REST once
+                from .github.provider import GitHubPRProvider
+                gw.github = GitHubPRProvider(provider.client, provider.cache)
+                commits, gh = gw._add_github([replace(c, pr=None) for c in commits])
+                gh_warnings = [f"GitHub GraphQL failed ({'; '.join(gh_warnings)}) - used REST instead", *gh.warnings]
+                gh_with_pr, gh_requests = gh.with_pr, gh_requests + gh.requests
             landed = gw.landed_at(commit_range.bad)
     warn += [str(w.message) for w in caught]
-    warn += list(stats.github_warnings)
+    warn += gh_warnings
 
     committed = _committed_at(path, [c.sha for c in commits])
     rows = []
@@ -135,7 +144,7 @@ def fetch_range(repo: str, good: str | None = None, bad: str | None = None, *, o
         "count": len(rows),
         "commits": rows,
         "stats": {"seconds": round(time.perf_counter() - t0, 2), "from_cache": stats.commit_cache_hits,
-                  "github_requests": stats.github_requests, "with_pr": stats.github_with_pr},
+                  "github_requests": gh_requests, "with_pr": gh_with_pr},
         "warnings": warn,
         "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -144,7 +153,7 @@ def fetch_range(repo: str, good: str | None = None, bad: str | None = None, *, o
         tmp = Path(str(out) + ".tmp")
         tmp.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
         os.replace(tmp, out)
-    log(f"[3/3] {len(rows)} commits, {stats.github_with_pr} with a PR ({stats.github_requests} GitHub requests, "
+    log(f"[3/3] {len(rows)} commits, {gh_with_pr} with a PR ({gh_requests} GitHub requests, "
         f"{result['stats']['seconds']} s)" + (f" -> {out}" if out else ""))
     for w in warn:
         log(f"      warning: {w}")

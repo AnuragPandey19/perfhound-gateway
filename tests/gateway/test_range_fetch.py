@@ -168,7 +168,8 @@ def test_graphql_answers_are_cached(tmp_path):
     assert len(fake.calls) == 1 and st.cache_hits == 1 and out[0].pr.number == 10
 
 
-def test_range_with_github_through_the_whole_path(fixture_repo, monkeypatch):
+def test_range_with_github_through_the_whole_path(fixture_repo, monkeypatch, tmp_path):
+    monkeypatch.setenv("PERFHOUND_CACHE_DIR", str(tmp_path))          # own GitHub cache: no answers from other tests
     slow = fixture_repo.sha("slow_add")
     fake = FakeGraphQL({slow: [gql_pr(77, slow, T0 + timedelta(days=1), issues=[(5, "add() got slow", T0)])]})
     monkeypatch.setenv("GITHUB_REPOSITORY", "acme/shop")                # as inside GitHub Actions
@@ -204,3 +205,24 @@ def test_first_commit_of_a_repository_has_nothing_to_compare(tmp_path):
     assert res["count"] == 0 and "first commit" in res["warnings"][0]
     assert json.loads(out.read_text(encoding="utf-8"))["count"] == 0
     assert "Perfhound: 0 commits" in summary_markdown(res)
+
+
+def test_graphql_refused_falls_back_to_rest(fixture_repo, monkeypatch, tmp_path):
+    """A token that may not use GraphQL on this repository: PRs still come, through REST."""
+    monkeypatch.setenv("PERFHOUND_CACHE_DIR", str(tmp_path))
+    slow = fixture_repo.sha("slow_add")
+
+    def transport(method, url, headers, timeout, body=None):
+        if method == "POST":                       # GraphQL: refused
+            return 200, {}, json.dumps({"data": {"repository": None}, "errors": [
+                {"type": "FORBIDDEN", "message": "Resource not accessible by integration"}]}).encode()
+        if f"/commits/{slow}/pulls" in url:        # REST: works
+            return 200, {}, json.dumps([{"number": 77, "title": "Slow add", "body": "", "labels": [],
+                                         "html_url": "u", "merged_at": Z(T0), "merge_commit_sha": slow}]).encode()
+        return 200, {}, b"[]"
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", "acme/shop")
+    res = fetch_range(str(fixture_repo.path), GOOD_TAG, BAD_TAG, out=None, client=gql_client(transport),
+                      cache=False, log=quiet)
+    assert res["commits"][-1]["pr"]["number"] == 77 and res["stats"]["with_pr"] == 1
+    assert any("used REST instead" in w for w in res["warnings"])

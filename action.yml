@@ -5,6 +5,10 @@ branding:
   color: "orange"
 
 inputs:
+  repository:
+    description: "Another public GitHub project to check, as owner/name (e.g. psf/requests). Empty: this repository."
+    required: false
+    default: ""
   good:
     description: "Last fast commit / tag / branch. Empty: the commit before this push (push), the PR's base (pull_request)."
     required: false
@@ -56,6 +60,7 @@ runs:
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
+        REPOSITORY: ${{ inputs.repository }}
         IN_GOOD: ${{ inputs.good }}
         IN_BAD: ${{ inputs.bad }}
         OUT: ${{ inputs.output }}
@@ -64,6 +69,20 @@ runs:
         PR_BASE: ${{ github.event.pull_request.base.sha }}
         PR_HEAD: ${{ github.event.pull_request.head.sha }}
       run: |
+        if [ -n "$REPOSITORY" ]; then
+          # another project: the gateway downloads only what the range needs (history + changed files)
+          if [ -z "$IN_GOOD" ]; then
+            echo "::error::When 'repository' is set, also give 'good' (and usually 'bad'), e.g. v2.32.3 and v2.32.4."
+            exit 1
+          fi
+          EXTRA=()
+          if [ "$EVALUATION" = "true" ]; then EXTRA+=(--evaluation); fi
+          python -m perfhound.gateway range "https://github.com/$REPOSITORY" --good "$IN_GOOD" --bad "${IN_BAD:-HEAD}" \
+            --out "$OUT" --github-repo "$REPOSITORY" --summary "$GITHUB_STEP_SUMMARY" "${EXTRA[@]}"
+          echo "file=$OUT" >> "$GITHUB_OUTPUT"
+          echo "commits=$(python -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['count'])" "$OUT")" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         cd "$GITHUB_WORKSPACE"
         if ! git rev-parse --git-dir > /dev/null 2>&1; then
           echo "::error::No git repository here. Add 'actions/checkout@v4' (with fetch-depth: 0) before this step."
